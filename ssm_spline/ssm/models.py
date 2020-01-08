@@ -23,7 +23,8 @@ from ssm.observations import \
     RobustAutoRegressiveObservations, \
     RecurrentAutoRegressiveObservations, \
     RecurrentRobustAutoRegressiveObservations, \
-    IdentityAutoRegressiveObservations
+    IdentityAutoRegressiveObservations, \
+    IdentitySigmaAutoRegressiveObservations
 
 from ssm.hierarchical import \
     HierarchicalInitialStateDistribution, \
@@ -38,6 +39,11 @@ from ssm.emissions import \
     GaussianIdentityEmissions, \
     GaussianNeuralNetworkEmissions, \
     GaussianSplineEmissions, \
+    GaussianLogisticEmissions, \
+    GaussianMonotonicNeuralNetworkEmissions, \
+    IsotropicGaussianSplineEmissions, \
+    IsotropicGaussianLogisticEmissions, \
+    IsotropicGaussianMonotonicNeuralNetworkEmissions, \
     GaussianCompoundNeuralNetworkEmissions, \
     StudentsTEmissions, \
     StudentsTIdentityEmissions, \
@@ -198,6 +204,7 @@ def SLDS(N, K, D, M=0,
         t=RecurrentRobustAutoRegressiveObservations if is_recurrent else RobustAutoRegressiveObservations,
         studentst=RecurrentRobustAutoRegressiveObservations if is_recurrent else RobustAutoRegressiveObservations,
         identity=IdentityAutoRegressiveObservations,
+        identity_sigma=IdentitySigmaAutoRegressiveObservations,
         )
 
     dynamics = dynamics.lower()
@@ -222,6 +229,11 @@ def SLDS(N, K, D, M=0,
         gaussian_id=GaussianIdentityEmissions,
         gaussian_nn=GaussianNeuralNetworkEmissions,
         gaussian_spline=GaussianSplineEmissions,
+        gaussian_logistic=GaussianLogisticEmissions,
+        gaussian_mnn=GaussianMonotonicNeuralNetworkEmissions,
+        iso_gaussian_spline=IsotropicGaussianSplineEmissions,
+        iso_gaussian_logistic=IsotropicGaussianLogisticEmissions,
+        iso_gaussian_mnn=IsotropicGaussianMonotonicNeuralNetworkEmissions,
         studentst=StudentsTEmissions,
         studentst_id=StudentsTIdentityEmissions,
         studentst_nn=StudentsTNeuralNetworkEmissions,
@@ -309,6 +321,11 @@ def LDS(N, D, M=0,
         gaussian_id=GaussianIdentityEmissions,
         gaussian_nn=GaussianNeuralNetworkEmissions,
         gaussian_spline=GaussianSplineEmissions,
+        gaussian_logistic=GaussianLogisticEmissions,
+        gaussian_mnn=GaussianMonotonicNeuralNetworkEmissions,
+        iso_gaussian_spline=IsotropicGaussianSplineEmissions,
+        iso_gaussian_logistic=IsotropicGaussianLogisticEmissions,
+        iso_gaussian_mnn=IsotropicGaussianMonotonicNeuralNetworkEmissions,
         studentst=StudentsTEmissions,
         studentst_id=StudentsTIdentityEmissions,
         studentst_nn=StudentsTNeuralNetworkEmissions,

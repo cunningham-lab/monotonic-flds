@@ -13,7 +13,7 @@ from ssm.util import random_rotation, ensure_args_are_lists, ensure_args_not_non
     logistic, logit, one_hot, generalized_newton_studentst_dof
 from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
-
+from scipy.stats import invwishart
 
 class _Observations(object):
     def __init__(self, K, D, M=0):
@@ -419,8 +419,347 @@ class CategoricalObservations(_Observations):
         raise NotImplementedError
 
 
+# class IdentityAutoRegressiveObservations(_Observations):
+#     def __init__(self, K, D, M,reg_coef=0,ll_scale=0):
+#         super(IdentityAutoRegressiveObservations, self).__init__(K, D, M)
+#         self.inv_sigmas = -2 + npr.randn(K, D) #inv_sigma is the log of the variance
+#         self.inv_sigma_init= np.zeros(D) #inv_sigma_init is the log of the variance of the initial data point
+#         self.K=K
+#         self.D=D
+#         self.reg_coef=reg_coef #Regularization coefficient of the variance
+#         self.ll_scale=ll_scale #Whether to scale likelihoods based on the number of data points
+#
+#     @property
+#     def params(self):
+#         return self.inv_sigmas
+#
+#     @params.setter
+#     def params(self, value):
+#         self.inv_sigmas = value
+#
+#     def permute(self, perm):
+#         self.inv_sigmas = self.inv_sigmas[perm]
+#
+#     @ensure_args_are_lists
+#     def initialize(self, datas, inputs=None, masks=None, tags=None):
+#         # sigmas=np.var(datas[1:]-datas[:-1])
+#         self.inv_sigmas = -2 + npr.randn(self.K, self.D)#np.log(sigmas + 1e-16)
+#
+#     # def _compute_sigmas(self, data, input, mask, tag):
+#     #     T, D = data.shape
+#     #     inv_sigmas = self.inv_sigmas
+#     #
+#     #     sigma_init = np.exp(self.inv_sigma_init) * np.ones((self.lags, self.K, self.D))
+#     #     sigma_ar = np.repeat(np.exp(inv_sigmas)[None, :, :], T-self.lags, axis=0)
+#     #     sigmas = np.concatenate((sigma_init, sigma_ar))
+#     #     assert sigmas.shape == (T, self.K, D)
+#     #     return sigmas
+#     #
+#     def log_likelihoods(self, data, input, mask, tag):
+#         sigmas = np.exp(self.inv_sigmas) + 1e-16
+#         sigma_init=np.exp(self.inv_sigma_init)+1e-16
+#
+#         #Log likelihood of data (except for first point)
+#         ll1 = -0.5 * np.sum(
+#             (np.log(2 * np.pi * sigmas) + (data[1:, None, :] - data[:-1, None, :])**2 / sigmas)
+#             * mask[1:, None, :], axis=2)
+#
+#         # ll2= -0.5 * np.sum(
+#         #     (np.log(2 * np.pi * sigma_init) + (data[0, None, :]) / sigma_init), axis=1) #Make 0 instead of data[0...]???
+#
+#         #Log likelihood of first point (just setting to 0, since we're not fitting sigma_init)
+#         ll2=np.array([0])
+#
+#         #Log likelihood of all data points (including first)
+#         ll=np.concatenate((ll1,ll2[:,np.newaxis]),axis=0)
+#
+#         #Scale log likelihood by number of data points (so trials w/ fewer data points are weighted equally per data point)
+#         if self.ll_scale!=0:
+#             ll=ll*self.ll_scale/data.shape[0]
+#
+#
+#         #Bias the latents to have low values (helps with putting the latents in the range where the spline knots are)
+#         beta=1
+#         penalty=-beta*data**2
+#         ll=ll+penalty
+#
+#         # print(ll.shape)
+#         return ll
+#
+#         # return -0.5 * np.sum(
+#         #     (np.log(2 * np.pi * sigmas) + (data[1:, None, :] - data[:-1, None, :])**2 / sigmas)
+#         #     * mask[1:, None, :], axis=2)
+#
+#
+#     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+#         D = self.D
+#         sigmas = np.exp(self.inv_sigmas) if with_noise else np.zeros((self.K, self.D))
+#         sigma_init = np.exp(self.inv_sigma_init) if with_noise else 0
+#
+#         if xhist.shape[0] == 0:
+#             return np.sqrt(sigma_init[z]) * npr.randn(D)
+#         else:
+#             return xhist[-1] + np.sqrt(sigmas[z]) * npr.randn(D)
+#
+#     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+#         x = np.concatenate(datas)
+#         weights = np.concatenate([Ez for Ez, _, _ in expectations])
+#         for k in range(self.K):
+#             # self.mus[k] = np.average(x, axis=0, weights=weights[:,k])
+#             sqerr = (x[1:] - x[:-1])**2
+#             d2=np.average(sqerr, weights=weights[1:,k], axis=0)
+#
+#             alpha=self.reg_coef
+#             if alpha==0:
+#                 # self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[1:,k], axis=0))
+#                 self.inv_sigmas[k] = np.log(d2)
+#             else:
+#                 sig_update=(-1+np.sqrt(1+4*alpha*d2))/(2*alpha) #analytic solution for prior on sigma. "sig_update" is actually the variance
+#                 self.inv_sigmas[k] = np.log(sig_update)
+#             #
+#             # print("is",self.inv_sigmas)
+#
+#     def smooth(self, expectations, data, input, tag):
+#         """
+#         Compute the mean observation under the posterior distribution
+#         of latent discrete states.
+#         """
+#         raise NotImplementedError
+#         # return expectations.dot(data)
+#
+#     # def log_prior(self):
+#     #     beta=0#self.reg_coef
+#     #     return -beta*np.exp(self.inv_sigmas)
+#
+#     def log_prior(self):
+#         #Prior on the variances
+#         alpha=self.reg_coef
+#         return -alpha*np.sum(np.exp(self.inv_sigmas))
+
+# class IdentityAutoRegressiveObservations(_Observations):
+#     def __init__(self, K, D, M,reg_coef=0,ll_scale=0,switch=False,switch_iter=1000):
+#         super(IdentityAutoRegressiveObservations, self).__init__(K, D, M)
+#         self.inv_sigmas = -2 + npr.randn(K, D) #inv_sigma is the log of the variance
+#         self.inv_sigma_init= np.zeros(D) #inv_sigma_init is the log of the variance of the initial data point
+#         self.K=K
+#         self.D=D
+#         self.reg_coef=reg_coef #Regularization coefficient of the variance
+#         self.ll_scale=ll_scale #Whether to scale likelihoods based on the number of data points
+#         self.switch=switch
+#         self.switch_iter=switch_iter
+#
+#     @property
+#     def params(self):
+#         return self.inv_sigmas
+#
+#     @params.setter
+#     def params(self, value):
+#         self.inv_sigmas = value
+#
+#     def permute(self, perm):
+#         self.inv_sigmas = self.inv_sigmas[perm]
+#
+#     @ensure_args_are_lists
+#     def initialize(self, datas, inputs=None, masks=None, tags=None):
+#         # sigmas=np.var(datas[1:]-datas[:-1])
+#         self.inv_sigmas = -2 + npr.randn(self.K, self.D)#np.log(sigmas + 1e-16)
+#         self.iter_count=0
+#     # def _compute_sigmas(self, data, input, mask, tag):
+#     #     T, D = data.shape
+#     #     inv_sigmas = self.inv_sigmas
+#     #
+#     #     sigma_init = np.exp(self.inv_sigma_init) * np.ones((self.lags, self.K, self.D))
+#     #     sigma_ar = np.repeat(np.exp(inv_sigmas)[None, :, :], T-self.lags, axis=0)
+#     #     sigmas = np.concatenate((sigma_init, sigma_ar))
+#     #     assert sigmas.shape == (T, self.K, D)
+#     #     return sigmas
+#     #
+#     def log_likelihoods(self, data, input, mask, tag):
+#         sigmas = np.exp(self.inv_sigmas) + 1e-16
+#         sigma_init=np.exp(self.inv_sigma_init)+1e-16
+#
+#         #Log likelihood of data (except for first point)
+#         ll1 = -0.5 * np.sum(
+#             (np.log(2 * np.pi * sigmas) + (data[1:, None, :] - data[:-1, None, :])**2 / sigmas)
+#             * mask[1:, None, :], axis=2)
+#
+#         # ll2= -0.5 * np.sum(
+#         #     (np.log(2 * np.pi * sigma_init) + (data[0, None, :]) / sigma_init), axis=1) #Make 0 instead of data[0...]???
+#
+#         #Log likelihood of first point (just setting to 0, since we're not fitting sigma_init)
+#         ll2=np.array([0])
+#
+#         #Log likelihood of all data points (including first)
+#         ll=np.concatenate((ll1,ll2[:,np.newaxis]),axis=0)
+#         # print(ll.shape)
+#         #Scale log likelihood by number of data points (so trials w/ fewer data points are weighted equally per data point)
+#         if self.ll_scale!=0:
+#             ll=ll*self.ll_scale/data.shape[0]
+#
+#         self.iter_count=self.iter_count+1
+#         #Bias the latents to have low values (helps with putting the latents in the range where the spline knots are)
+#
+#         if self.switch:
+#             if self.iter_count<(4*self.switch_iter+50):
+#                 beta=1
+#             else:
+#                 # beta=-1
+#                 beta=0
+#             # beta=1
+#         else:
+#             beta=.1#10
+#
+#         if self.D==1:
+#             # penalty=-beta*data**2
+#             # data2=np.copy(data)
+#             # data2[np.abs(data2)>=1]=.99999
+#             # penalty=beta*np.log(1-np.abs(data2))
+#
+#             # print(data.shape)
+#             # data[np.abs(data[:,0])>=1,0]=.99999
+#             # penalty0=beta*np.log(1-np.abs(data))
+#             #
+#             # inc=~(np.isnan(penalty0) | np.isinf(penalty0))
+#             # penalty=inc*penalty0+~inc*-50
+#
+#             #### FOR KEEPING DATA BETWEEN -1 AND 1
+#             # inc=np.abs(data)<1
+#             # data2=inc*data+~inc*(1-1e-8)
+#             # penalty=beta*np.log(1-np.abs(data2))
+#
+#
+#             inc=np.abs(data)>0
+#             data2=inc*data+~inc*(1-1e-8)
+#             penalty=beta*np.log(data2)
+#
+#
+#             # max_val = np.max(np.abs(data))<1:
+#             # if max_val<1:
+#             #     penalty=beta*np.log(1-np.abs(data))
+#             # else:
+#             #     penalty=beta*np.log(tmp_val+1e-8-np.abs(data))
+#
+#
+#             # penalty[np.isnan(penalty)]=-10
+#             # pen_list=[]
+#             # for i in range(penalty0.shape[0]):
+#             #     if np.isinf(penalty0[i]):
+#             #         pen_list.append(-50)
+#             #     else:
+#             #         pen_list.append(penalty0[i])
+#             # penalty=np.array(pen_list)
+#
+#
+#
+#             # print(penalty.shape)
+#             # penalty[0]=np.inf
+#             # penalty[np.isinf(penalty)]=0
+#             # print(penalty.shape)
+#             # pens=
+#             # penalty=beta*np.sum()
+#         if self.D>1:
+#             # penalty=-beta*np.sum(data**2,axis=1)[:,np.newaxis]
+#
+#
+#             # data2=np.copy(data)
+#             # data2[np.abs(data2)>=1]=.99999
+#             # penalty=beta*np.sum(np.log(1-np.abs(data2)),axis=1)[:,np.newaxis]
+#
+#
+#             penalty=0
+#
+#
+#             # inc=np.abs(data)>0
+#             # data2=inc*data+~inc*(1-1e-8)
+#             # penalty=np.sum(beta*np.log(data2),axis=1)[:,np.newaxis]
+#
+#             # print(penalty.shape)
+#
+#
+#         assert np.isfinite(np.sum(ll))
+#         assert np.isfinite(np.sum(penalty))
+#
+#
+#         ll=ll+penalty
+#         # print("ll",ll.shape)
+#
+#         return ll
+#
+#         # return -0.5 * np.sum(
+#         #     (np.log(2 * np.pi * sigmas) + (data[1:, None, :] - data[:-1, None, :])**2 / sigmas)
+#         #     * mask[1:, None, :], axis=2)
+#
+#
+#     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+#         D = self.D
+#         sigmas = np.exp(self.inv_sigmas) if with_noise else np.zeros((self.K, self.D))
+#         sigma_init = np.exp(self.inv_sigma_init) if with_noise else 0
+#
+#         if xhist.shape[0] == 0:
+#             return np.sqrt(sigma_init[z]) * npr.randn(D)
+#         else:
+#             return xhist[-1] + np.sqrt(sigmas[z]) * npr.randn(D)
+#
+#     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+#
+#         alpha=self.reg_coef
+#
+#         x = np.concatenate(datas)
+#         weights = np.concatenate([Ez for Ez, _, _ in expectations])
+#         for k in range(self.K):
+#             # self.mus[k] = np.average(x, axis=0, weights=weights[:,k])
+#             sqerr = (x[1:] - x[:-1])**2
+#             d2=np.average(sqerr, weights=weights[1:,k], axis=0)
+#
+#             if self.switch:
+#                 if self.iter_count>=(4*self.switch_iter+50):
+#
+#                     if alpha==0:
+#                         # self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[1:,k], axis=0))
+#                         self.inv_sigmas[k] = np.log(d2)
+#                     else:
+#                         sig_update=(-1+np.sqrt(1+4*alpha*d2))/(2*alpha) #analytic solution for prior on sigma. "sig_update" is actually the variance
+#                         self.inv_sigmas[k] = np.log(sig_update)
+#                 else:
+#                     self.inv_sigmas[k] = np.log(d2)
+#             else:
+#                 if alpha==0:
+#                     # self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[1:,k], axis=0))
+#                     self.inv_sigmas[k] = np.log(d2)
+#                 else:
+#                     sig_update=(-1+np.sqrt(1+4*alpha*d2))/(2*alpha) #analytic solution for prior on sigma. "sig_update" is actually the variance
+#                     self.inv_sigmas[k] = np.log(sig_update)
+#             #
+#             # print("is",self.inv_sigmas)
+#
+#     def smooth(self, expectations, data, input, tag):
+#         """
+#         Compute the mean observation under the posterior distribution
+#         of latent discrete states.
+#         """
+#         raise NotImplementedError
+#         # return expectations.dot(data)
+#
+#     # def log_prior(self):
+#     #     beta=0#self.reg_coef
+#     #     return -beta*np.exp(self.inv_sigmas)
+#
+#     def log_prior(self):
+#         #Prior on the variances
+#         if self.switch:
+#             if self.iter_count>=(4*self.switch_iter+50):
+#                 alpha=self.reg_coef
+#                 return -alpha*np.sum(np.exp(self.inv_sigmas))
+#             else:
+#                 return 0
+#         else:
+#             alpha=self.reg_coef
+#             return -alpha*np.sum(np.exp(self.inv_sigmas))
+
+
+
 class IdentityAutoRegressiveObservations(_Observations):
-    def __init__(self, K, D, M,reg_coef=0,ll_scale=0):
+    def __init__(self, K, D, M,reg_coef=0,ll_scale=0,switch=False,switch_iter=1000):
         super(IdentityAutoRegressiveObservations, self).__init__(K, D, M)
         self.inv_sigmas = -2 + npr.randn(K, D) #inv_sigma is the log of the variance
         self.inv_sigma_init= np.zeros(D) #inv_sigma_init is the log of the variance of the initial data point
@@ -428,6 +767,8 @@ class IdentityAutoRegressiveObservations(_Observations):
         self.D=D
         self.reg_coef=reg_coef #Regularization coefficient of the variance
         self.ll_scale=ll_scale #Whether to scale likelihoods based on the number of data points
+        self.switch=switch
+        self.switch_iter=switch_iter
 
     @property
     def params(self):
@@ -444,6 +785,263 @@ class IdentityAutoRegressiveObservations(_Observations):
     def initialize(self, datas, inputs=None, masks=None, tags=None):
         # sigmas=np.var(datas[1:]-datas[:-1])
         self.inv_sigmas = -2 + npr.randn(self.K, self.D)#np.log(sigmas + 1e-16)
+        self.iter_count=0
+    # def _compute_sigmas(self, data, input, mask, tag):
+    #     T, D = data.shape
+    #     inv_sigmas = self.inv_sigmas
+    #
+    #     sigma_init = np.exp(self.inv_sigma_init) * np.ones((self.lags, self.K, self.D))
+    #     sigma_ar = np.repeat(np.exp(inv_sigmas)[None, :, :], T-self.lags, axis=0)
+    #     sigmas = np.concatenate((sigma_init, sigma_ar))
+    #     assert sigmas.shape == (T, self.K, D)
+    #     return sigmas
+    #
+    def log_likelihoods(self, data, input, mask, tag):
+        sigmas = np.exp(self.inv_sigmas) + 1e-16
+        sigma_init=np.exp(self.inv_sigma_init)+1e-16
+
+        #Log likelihood of data (except for first point)
+        ll1 = -0.5 * np.sum(
+            (np.log(2 * np.pi * sigmas) + (data[1:, None, :] - data[:-1, None, :])**2 / sigmas)
+            * mask[1:, None, :], axis=2)
+
+        # ll2= -0.5 * np.sum(
+        #     (np.log(2 * np.pi * sigma_init) + (data[0, None, :]) / sigma_init), axis=1) #Make 0 instead of data[0...]???
+
+        #Log likelihood of first point (just setting to 0, since we're not fitting sigma_init)
+        ll2=np.array([0])
+
+        #Log likelihood of all data points (including first)
+        ll=np.concatenate((ll1,ll2[:,np.newaxis]),axis=0)
+        # print(ll.shape)
+        #Scale log likelihood by number of data points (so trials w/ fewer data points are weighted equally per data point)
+        if self.ll_scale!=0:
+            ll=ll*self.ll_scale/data.shape[0]
+
+        self.iter_count=self.iter_count+1
+        #Bias the latents to have low values (helps with putting the latents in the range where the spline knots are)
+
+        if self.switch:
+            if self.iter_count<(4*self.switch_iter+50):
+                beta=1
+            else:
+                # beta=-1
+                beta=0
+            # beta=1
+        else:
+            beta=.1#10
+
+        if self.D==1:
+            # penalty=-beta*data**2
+            # data2=np.copy(data)
+            # data2[np.abs(data2)>=1]=.99999
+            # penalty=beta*np.log(1-np.abs(data2))
+
+            # print(data.shape)
+            # data[np.abs(data[:,0])>=1,0]=.99999
+            # penalty0=beta*np.log(1-np.abs(data))
+            #
+            # inc=~(np.isnan(penalty0) | np.isinf(penalty0))
+            # penalty=inc*penalty0+~inc*-50
+
+            #### FOR KEEPING DATA BETWEEN -1 AND 1
+            # inc=np.abs(data)<1
+            # data2=inc*data+~inc*(1-1e-8)
+            # penalty=beta*np.log(1-np.abs(data2))
+
+
+            # inc=np.abs(data)>0
+            # data2=inc*data+~inc*(1-1e-8)
+            # penalty=beta*np.log(data2)
+            penalty=0
+
+
+            # max_val = np.max(np.abs(data))<1:
+            # if max_val<1:
+            #     penalty=beta*np.log(1-np.abs(data))
+            # else:
+            #     penalty=beta*np.log(tmp_val+1e-8-np.abs(data))
+
+
+            # penalty[np.isnan(penalty)]=-10
+            # pen_list=[]
+            # for i in range(penalty0.shape[0]):
+            #     if np.isinf(penalty0[i]):
+            #         pen_list.append(-50)
+            #     else:
+            #         pen_list.append(penalty0[i])
+            # penalty=np.array(pen_list)
+
+
+
+            # print(penalty.shape)
+            # penalty[0]=np.inf
+            # penalty[np.isinf(penalty)]=0
+            # print(penalty.shape)
+            # pens=
+            # penalty=beta*np.sum()
+        if self.D>1:
+            # penalty=-beta*np.sum(data**2,axis=1)[:,np.newaxis]
+
+
+            # data2=np.copy(data)
+            # data2[np.abs(data2)>=1]=.99999
+            # penalty=beta*np.sum(np.log(1-np.abs(data2)),axis=1)[:,np.newaxis]
+
+
+            penalty=0
+
+
+            # inc=np.abs(data)>0
+            # data2=inc*data+~inc*(1-1e-8)
+            # penalty=np.sum(beta*np.log(data2),axis=1)[:,np.newaxis]
+
+            # print(penalty.shape)
+
+
+        assert np.isfinite(np.sum(ll))
+        assert np.isfinite(np.sum(penalty))
+
+
+        ll=ll+penalty
+        # print("ll",ll.shape)
+
+        return ll
+
+        # return -0.5 * np.sum(
+        #     (np.log(2 * np.pi * sigmas) + (data[1:, None, :] - data[:-1, None, :])**2 / sigmas)
+        #     * mask[1:, None, :], axis=2)
+
+
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+        D = self.D
+        sigmas = np.exp(self.inv_sigmas) if with_noise else np.zeros((self.K, self.D))
+        sigma_init = np.exp(self.inv_sigma_init) if with_noise else 0
+
+        if xhist.shape[0] == 0:
+            return np.sqrt(sigma_init[z]) * npr.randn(D)
+        else:
+            return xhist[-1] + np.sqrt(sigmas[z]) * npr.randn(D)
+
+    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+
+        alpha=self.reg_coef
+
+
+
+        CovP=alpha*np.identity(self.D) #prior covariance
+
+        x = np.concatenate(datas)
+        weights = np.concatenate([Ez for Ez, _, _ in expectations])
+        for k in range(self.K):
+            # self.mus[k] = np.average(x, axis=0, weights=weights[:,k])
+            sqerr = (x[1:] - x[:-1])**2
+            d2=np.average(sqerr, weights=weights[1:,k], axis=0)
+
+            # if self.switch:
+            #     if self.iter_count>=(4*self.switch_iter+50):
+            #
+            #         if alpha==0:
+            #             # self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[1:,k], axis=0))
+            #             self.inv_sigmas[k] = np.log(d2)
+            #         else:
+            #             sig_update=(-1+np.sqrt(1+4*alpha*d2))/(2*alpha) #analytic solution for prior on sigma. "sig_update" is actually the variance
+            #             self.inv_sigmas[k] = np.log(sig_update)
+            #     else:
+            #         self.inv_sigmas[k] = np.log(d2)
+            # else:
+            #     if alpha==0:
+            #         # self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[1:,k], axis=0))
+            #         self.inv_sigmas[k] = np.log(d2)
+            #     else:
+            #         sig_update=(-1+np.sqrt(1+4*alpha*d2))/(2*alpha) #analytic solution for prior on sigma. "sig_update" is actually the variance
+            #         self.inv_sigmas[k] = np.log(sig_update)
+
+            if alpha==0:
+                self.inv_sigmas[k]=np.log(d2)
+            else:
+
+                Cov=np.diag(d2)
+
+                # print("mstep")
+                # print("Cshape",Cov.shape)
+                # print("Cpshape",CovP.shape)
+
+                # print("m Cshape",Cov.shape)
+                Cov_update=(Cov+CovP)/(3*self.D+1)
+                sig_update=np.diag(Cov_update)
+                # print("m s shape",sig_update.shape)
+
+
+                self.inv_sigmas[k] = np.log(sig_update)
+
+            #
+            # print("is",self.inv_sigmas)
+
+    def smooth(self, expectations, data, input, tag):
+        """
+        Compute the mean observation under the posterior distribution
+        of latent discrete states.
+        """
+        raise NotImplementedError
+        # return expectations.dot(data)
+
+    # def log_prior(self):
+    #     beta=0#self.reg_coef
+    #     return -beta*np.exp(self.inv_sigmas)
+
+    def log_prior(self):
+        #Prior on the variances
+        # if self.switch:
+        #     if self.iter_count>=(4*self.switch_iter+50):
+        #         alpha=self.reg_coef
+        #         return -alpha*np.sum(np.exp(self.inv_sigmas))
+        #     else:
+        #         return 0
+        # else:
+        #     alpha=self.reg_coef
+        #     return -alpha*np.sum(np.exp(self.inv_sigmas))
+        alpha=self.reg_coef
+        if alpha==0:
+            return 0
+        else:
+            
+            CovP=alpha*np.identity(self.D)
+            Cov=np.diag(np.exp(self.inv_sigmas[0,:]))
+            # print("Cshape",Cov.shape)
+            # print("Cpshape",CovP.shape)
+            return np.log(invwishart.pdf(Cov,df=self.D,scale=CovP))
+
+
+
+
+
+class IdentitySigmaAutoRegressiveObservations(_Observations):
+    def __init__(self, K, D, M,sigma=.01,ll_scale=0):
+        super(IdentitySigmaAutoRegressiveObservations, self).__init__(K, D, M)
+        self.inv_sigmas = np.log(sigma**2*np.ones([K, D])) #inv_sigma is the log of the variance
+        self.inv_sigma_init= np.log(sigma**2*np.ones(D)) #inv_sigma_init is the log of the variance of the initial data point
+        self.K=K
+        self.D=D
+        self.ll_scale=ll_scale #Whether to scale likelihoods based on the number of data points
+        self.sig=sigma
+
+    @property
+    def params(self):
+        return self.inv_sigma_init
+
+    @params.setter
+    def params(self, value):
+        self.inv_sigma_init = value
+
+    def permute(self, perm):
+        self.inv_sigma_init = self.inv_sigmas_init[perm]
+
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        # sigmas=np.var(datas[1:]-datas[:-1])
+        self.inv_sigma_init = np.log(self.sig**2*np.ones(self.D))
+        self.iter_count=0
 
     # def _compute_sigmas(self, data, input, mask, tag):
     #     T, D = data.shape
@@ -478,11 +1076,25 @@ class IdentityAutoRegressiveObservations(_Observations):
             ll=ll*self.ll_scale/data.shape[0]
 
 
-        #Bias the latents to have low values (helps with putting the latents in the range where the spline knots are)
-        beta=1
+        self.iter_count=self.iter_count+1
+
+        if self.iter_count<10050: #20
+            beta=1
+        elif self.iter_count<20050: #30
+            beta=0
+        else:
+            beta=-1
+
+
         penalty=-beta*data**2
         ll=ll+penalty
 
+        #Bias the latents to have low values (helps with putting the latents in the range where the spline knots are)
+        # beta=1
+        # penalty=-beta*data**2
+        # ll=ll+penalty
+
+        # print(self.iter_count)
         # print(ll.shape)
         return ll
 
@@ -503,21 +1115,21 @@ class IdentityAutoRegressiveObservations(_Observations):
 
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
         x = np.concatenate(datas)
-        weights = np.concatenate([Ez for Ez, _, _ in expectations])
-        for k in range(self.K):
-            # self.mus[k] = np.average(x, axis=0, weights=weights[:,k])
-            sqerr = (x[1:] - x[:-1])**2
-            d2=np.average(sqerr, weights=weights[1:,k], axis=0)
-
-            alpha=self.reg_coef
-            if alpha==0:
-                # self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[1:,k], axis=0))
-                self.inv_sigmas[k] = np.log(d2)
-            else:
-                sig_update=(-1+np.sqrt(1+4*alpha*d2))/(2*alpha) #analytic solution for prior on sigma. "sig_update" is actually the variance
-                self.inv_sigmas[k] = np.log(sig_update)
-            #
-            # print("is",self.inv_sigmas)
+        # weights = np.concatenate([Ez for Ez, _, _ in expectations])
+        # for k in range(self.K):
+        #     # self.mus[k] = np.average(x, axis=0, weights=weights[:,k])
+        #     sqerr = (x[1:] - x[:-1])**2
+        #     d2=np.average(sqerr, weights=weights[1:,k], axis=0)
+        #
+        #     alpha=self.reg_coef
+        #     if alpha==0:
+        #         # self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[1:,k], axis=0))
+        #         self.inv_sigmas[k] = np.log(d2)
+        #     else:
+        #         sig_update=(-1+np.sqrt(1+4*alpha*d2))/(2*alpha) #analytic solution for prior on sigma. "sig_update" is actually the variance
+        #         self.inv_sigmas[k] = np.log(sig_update)
+        #     #
+        #     # print("is",self.inv_sigmas)
 
     def smooth(self, expectations, data, input, tag):
         """
@@ -531,10 +1143,12 @@ class IdentityAutoRegressiveObservations(_Observations):
     #     beta=0#self.reg_coef
     #     return -beta*np.exp(self.inv_sigmas)
 
-    def log_prior(self):
+    # def log_prior(self):
         #Prior on the variances
-        alpha=self.reg_coef
-        return -alpha*np.sum(np.exp(self.inv_sigmas))
+        # alpha=self.reg_coef
+        # return -alpha*np.sum(np.exp(self.inv_sigmas))
+
+
 
 class AutoRegressiveObservations(_Observations):
     def __init__(self, K, D, M=0, lags=1,reg_type="none",reg_coef=0):

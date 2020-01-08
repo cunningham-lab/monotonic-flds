@@ -10,7 +10,7 @@ from autograd.tracer import getval
 from autograd.misc import flatten
 from autograd import value_and_grad
 
-from ssm.optimizers import adam_step, rmsprop_step, sgd_step, convex_combination
+from ssm.optimizers import adam_step, adam_step2, rmsprop_step, sgd_step, convex_combination, bfgs, lbfgs, adam
 from ssm.primitives import hmm_normalizer, hmm_expected_states, hmm_filter, viterbi
 from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists
@@ -349,11 +349,12 @@ class _SwitchingLDS(object):
     def initialize(self, datas, inputs=None, masks=None, tags=None, num_em_iters=25):
         # First initialize the observation model
         self.emissions.initialize(datas, inputs, masks, tags)
-
+        # print(self.emissions)
         # Get the initialized variational mean for the data
         xs = [self.emissions.invert(data, input, mask, tag)
               for data, input, mask, tag in zip(datas, inputs, masks, tags)]
         xmasks = [np.ones_like(x, dtype=bool) for x in xs]
+        # print(xs)
 
         # Now run a few iterations of EM on a ARHMM with the variational mean
         print("Initializing with an ARHMM using {} steps of EM.".format(num_em_iters))
@@ -655,6 +656,9 @@ class _SwitchingLDS(object):
         step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step)[optimizer]
         state = None
         for itr in pbar:
+            if itr==15000:#switch_optimizer_iter:
+                step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step, adam2=adam_step2)["adam2"]
+                # state=None
             # Update the emission and variational posterior parameters
             params, val, g, state = step(value_and_grad(_objective), params, itr, state)
             elbos.append(-val * T)
@@ -663,13 +667,18 @@ class _SwitchingLDS(object):
             pbar.set_description("Surrogate ELBO: {:.1f}".format(elbos[-1]))
             pbar.update()
 
+        # optimizer0 = dict(bfgs=bfgs, lbfgs=lbfgs, adam=adam)[optimizer]
+        # params=optimizer0(_objective, params, num_iters=num_iters, full_output=False)
+        # elbos.append(-_objective(params, 0) * T)
+
         # Save the final emission and variational parameters
         if learning:
             self.emissions.params, variational_posterior.params = params
         else:
             variational_posterior.params = params
 
-        return elbos
+        best_params=params
+        return elbos, best_params
 
     @ensure_variational_args_are_lists
     def fit(self, variational_posterior, datas,

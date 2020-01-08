@@ -229,18 +229,88 @@ hermite_basis = lambda t: (2*t**3-3*t**2+1,t**3-2*t**2+t,-2*t**3+3*t**2,t**3-t**
 #     m1=ys[1]-ys[0]
 #     return ys[0]*h00+m0*h10+ys[1]*h01+m1*h11
 
-def spline_func(x,ps):
+# def spline_func(x,ps,n_kn=16):
+#     # print("min",np.min(x))
+#     # print("max",np.max(x))
+#     # delta_ys=np.exp(ps)
+#     delta_ys=softplus(ps)
+#     ys=np.cumsum(delta_ys)
+#
+#     # knots=np.arange(-1,-1+len(ps))
+#     # knots=np.array([-5,-1,0,1,2,5])
+#     # knots=np.array([-2,-1,0,1,2,3])
+#     # knots=np.array([-3,-1,-0.6,-0.2,0,.2,.4,.6,.8,1,1.2,1.6,2,4])
+#     if n_kn==11:
+#         knots=np.array([-1,-0.8,-0.6, -0.4, -0.2, 0, 0.2, 0.4,0.6,0.8,1])
+#     if n_kn==16:
+#         knots=np.array([-3,-1.6,-1.2,-0.9,-0.7,-0.5, -0.3, -0.1, 0.1, 0.3, 0.5,0.7,0.9,1.2,1.6,3])
+#     if n_kn==7:
+#         knots=np.array([-3,-1,-0.5, 0, 0.5, 1, 3])
+#     if n_kn==5:
+#         knots=np.array([-1.5,-0.5, 0, 0.5, 1.5])
+#     idxs=np.argmax(x<knots,axis=1)-1
+#     x_l=knots[idxs,np.newaxis]
+#
+#     h = np.diff(knots)
+#     h_rel = h[idxs,np.newaxis]
+#
+#     h00,h10,h01,h11 = hermite_basis((x-x_l)/h_rel)
+#
+#     secs=np.diff(ys)/h
+#
+#         # Now calculate interval widths:
+#
+#     # print("secs0",secs[0])
+#     # print("shape",x.shape)
+#     avg_secs=(secs[:-1]+secs[1:])/2
+#     tan_init = np.concatenate((secs[0:1],avg_secs,secs[-1:]))
+#
+#     # tan_init=np.array([0.1,0.1,0.1,0.1,0.1])
+#
+#     #
+#     #
+#     alpha = tan_init[:-1]/(secs+.001)
+#     beta = tan_init[1:]/(secs+.001) # to k-2
+#
+#
+#     # Check for monotonicity:
+#     cond = alpha**2+beta**2
+#
+#     inc1=np.hstack((cond<9,np.array([1])))
+#     inc2=np.hstack((np.array([1]),cond<9))
+#
+#     tan_init2=inc1*inc2*tan_init+(1-inc1)*np.hstack((3./np.sqrt(cond)*alpha*secs,np.array([1])))+(1-inc2)*np.hstack((np.array([1]),3./np.sqrt(cond)*beta*secs))
+#
+#     return ys[idxs,np.newaxis]*h00+h_rel*tan_init2[idxs,np.newaxis]*h10+ys[idxs+1,np.newaxis]*h01+h_rel*tan_init2[idxs+1,np.newaxis]*h11
+#
+
+
+
+def spline_func(x,ps,n_kn=13):
     # print("min",np.min(x))
     # print("max",np.max(x))
     # delta_ys=np.exp(ps)
-    delta_ys=softplus(ps)
+    preset=np.array([0,1,0,0,0,0,0,0,0,0,0,0,1])[:,np.newaxis]
+
+    delta_ys_temp=softplus(ps)
+#    delta_ys=delta_ys_temp
+    delta_ys=delta_ys_temp*(1-preset)
     ys=np.cumsum(delta_ys)
 
     # knots=np.arange(-1,-1+len(ps))
     # knots=np.array([-5,-1,0,1,2,5])
     # knots=np.array([-2,-1,0,1,2,3])
     # knots=np.array([-3,-1,-0.6,-0.2,0,.2,.4,.6,.8,1,1.2,1.6,2,4])
-    knots=np.array([-3,-1.6,-1.2,-0.9,-0.7,-0.5, -0.3, -0.1, 0.1, 0.3, 0.5,0.7,0.9,1.2,1.6,3])
+    if n_kn==16:
+        knots=np.array([-3,-1.6,-1.2,-0.9,-0.7,-0.5, -0.3, -0.1, 0.1, 0.3, 0.5,0.7,0.9,1.2,1.6,3])
+    if n_kn==13:
+        knots=np.array([-1.2,-1,-0.8,-0.6,-0.4,-0.2,0,0.2,0.4,0.6,0.8,1,1.2])
+    if n_kn==7:
+        knots=np.array([-3,-1,-0.5, 0, 0.5, 1, 3])
+    if n_kn==5:
+        knots=np.array([-1.5,-0.5, 0, 0.5, 1.5])
+    if n_kn==4:
+        knots=np.array([-1,-0.4, 0.4, 1])
     idxs=np.argmax(x<knots,axis=1)-1
     x_l=knots[idxs,np.newaxis]
 
@@ -279,6 +349,7 @@ def spline_func(x,ps):
 
 
 
+
     #
     # # Check for monotonicity:
     # cond = alpha**2+beta**2
@@ -305,3 +376,65 @@ def spline_func(x,ps):
     # #     m1[idxs==i]=avg_secs[i]
     #
     # return ys[idxs,np.newaxis]*h00+h_rel*tan_init[idxs,np.newaxis]*h10+ys[idxs+1,np.newaxis]*h01+h_rel*tan_init[idxs+1,np.newaxis]*h11
+
+def logistic_func(x,params):
+        k=softplus(params[0])
+        x0=params[1]
+        L=softplus(params[2])
+        return L/(1.+np.exp(-k*(x-x0)))
+
+# def logistic_func(x,params):
+#         k=params[0]
+#         x0=params[1]
+#         L=params[2]
+#         return L/(1.+np.exp(-k*(x-x0)))
+
+relu = lambda x: np.maximum(x, 0.)
+relu2 = lambda x: np.maximum(x, x/10)
+
+def mnn_func(inputs,ws,bs):
+    for W0, b0 in zip(ws, bs):
+        # print(W.shape)
+        W=softplus(W0)
+        b=b0
+        outputs = np.dot(inputs, W) + b
+        # inputs = np.tanh(outputs)
+        inputs = np.tanh(outputs)
+        # inputs = relu(outputs)
+        # print(outputs.shape)
+    # outputs=relu(outputs)
+    return outputs
+    # return outputs[:, None, :]
+
+def mnn_func2(inputs,ws,bs):
+    for W0, b0 in zip(ws, bs):
+        # print(W.shape)
+        W=softplus(W0)
+        b=b0
+        outputs = np.dot(inputs, W) + b
+        # inputs = np.tanh(outputs)
+        inputs = np.tanh(outputs)
+        # inputs = relu(outputs)
+        # print(outputs.shape)
+    outputs=relu(outputs)
+    # outputs=relu2(outputs)
+    return outputs
+
+def mnn_func3(inputs,ws,bs):
+    j=0
+    for W0, b0 in zip(ws, bs):
+        j=j+1
+        # print(W.shape)
+        W=softplus(W0)
+        b=b0
+        if j<len(bs):
+            outputs = np.dot(inputs, W) + b
+        else:
+            outputs = np.dot(inputs, W)
+        # inputs = np.tanh(outputs)
+        inputs = np.tanh(outputs)
+        # inputs = relu(outputs)
+        # print(outputs.shape)
+    # outputs=relu(outputs)
+    return outputs
+    # return outputs[:, None, :]

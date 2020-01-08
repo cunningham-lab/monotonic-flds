@@ -4,7 +4,7 @@ from autograd.scipy.special import gammaln
 from autograd.scipy.linalg import block_diag
 
 from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
-    ensure_slds_args_not_none, logistic, logit, softplus, inv_softplus, spline_func
+    ensure_slds_args_not_none, logistic, logit, softplus, inv_softplus, spline_func, logistic_func, mnn_func, mnn_func2, mnn_func3
 from ssm.preprocessing import interpolate_data, pca_with_imputation
 
 
@@ -508,20 +508,29 @@ class _IdentityEmissions(_Emissions):
         return np.copy(data)
 
 
-# Allow general nonlinear emission models with neural networks
+# Spline Emissions
 class _SplineEmissions(_Emissions):
-    def __init__(self, N, K, D, M=0, single_subspace=True,comb_type='mult', **kwargs):
+    def __init__(self, N, K, D, M=0, single_subspace=True,comb_type='add',switch=False,switch_iter=1000,n_kn=13, init_params=None, **kwargs):
         assert single_subspace, "_NeuralNetworkEmissions only supports `single_subspace=True`"
         super(_SplineEmissions, self).__init__(N, K, D, M=M, single_subspace=True)
 
         self.comb_type=comb_type
         # Initialize the parameters
-        n_kn=16
+        # n_kn=16
+        self.n_kn=n_kn
         # self.ps=npr.randn(N,n_kn,D)
-        self.ps=-6*np.ones([N,n_kn,D])
+        if init_params is None:
+            self.ps=-6*np.ones([N,n_kn,D])
+        else:
+            self.ps=init_params
+        # self.ps[:,4:(n_kn-4),:]=-1.5
+        # self.ps[6]=.38
+        # self.ps[:,1:,:]=-2.25
         # print(self.ps.shape)
         # self.ps[0]=-10
-
+        self.iter_count=0
+        self.switch=switch
+        self.switch_iter=switch_iter
 
     @property
     def params(self):
@@ -555,7 +564,7 @@ class _SplineEmissions(_Emissions):
                 # print("d",d)
                 # print("p shape",self.ps.shape)
                 # temp_p=self.ps[:,:,d:d+1]
-                output = [spline_func(x[:,d:d+1],p_i[:,d:d+1]) for p_i in self.ps]
+                output = [spline_func(x[:,d:d+1],p_i[:,d:d+1],self.n_kn) for p_i in self.ps]
                 temp=np.hstack(output)
                 temp2=np.expand_dims(temp,1)
                 final_output=final_output*temp2
@@ -566,7 +575,7 @@ class _SplineEmissions(_Emissions):
                 # print("d",d)
                 # print("p shape",self.ps.shape)
                 # temp_p=self.ps[:,:,d:d+1]
-                output = [spline_func(x[:,d:d+1],p_i[:,d:d+1]) for p_i in self.ps]
+                output = [spline_func(x[:,d:d+1],p_i[:,d:d+1],self.n_kn) for p_i in self.ps]
                 temp=np.hstack(output)
                 temp2=np.expand_dims(temp,1)
                 final_output=final_output+temp2
@@ -584,10 +593,340 @@ class _SplineEmissions(_Emissions):
         # m=np.mean(data,axis=1).reshape(-1,1)
         # return 1*m/np.max(m)
 
-        temp=npr.rand(data.shape[0], self.D)-0.5
-        m=np.mean(data,axis=1).reshape(-1,1)
-        temp[:,0:1]=m/np.max(m)-0.5
+        # temp=npr.rand(data.shape[0], self.D)-0.5
+        # m=np.mean(data,axis=1).reshape(-1,1)
+        # temp[:,0:1]=m/np.max(m)-0.5
+        if tag is None:
+            temp=1.6*npr.rand(data.shape[0], self.D)-0.8
+            m=np.mean(data,axis=1).reshape(-1,1)
+            # temp[:,0:1]=1.6*m/np.max(m)-0.8+.01*npr.rand(data.shape[0], 1)
+            if np.all(m==0):
+                temp[:,0:1]=-0.8
+            else:
+                temp[:,0:1]=1.6*m/np.max(m)-0.8
+        else:
+            temp=tag
+
         return temp
+
+    def log_prior(self):
+        self.iter_count=self.iter_count+1
+        beta=1
+        beta2=0
+        # print(self.iter_count)
+        if self.switch:
+            if self.iter_count>self.switch_iter:
+                delta_ys=softplus(self.ps)
+                smooth_spline_pens=[np.sum(np.abs(np.diff(delta_ys[i],axis=0))) for i in range(len(self.ps))]
+                return -beta*np.sum(delta_ys**2) - beta2 * np.sum(smooth_spline_pens)
+            else:
+                return 0
+        else:
+            delta_ys=softplus(self.ps)
+            # smooth_spline_pens=[np.sum(np.abs(np.diff(delta_ys[i],axis=0))) for i in range(len(self.ps))]
+            smooth_spline_pens=[np.sum(np.abs(np.diff(np.diff(delta_ys[i],axis=0),axis=0))) for i in range(len(self.ps))]
+            return -beta*np.sum(delta_ys**2) - beta2 * np.sum(smooth_spline_pens)
+            # return 0
+
+
+
+# Spline Emissions
+class _LogisticEmissions(_Emissions):
+    def __init__(self, N, K, D, M=0, single_subspace=True,comb_type='add',init_params=None, **kwargs):
+        assert single_subspace, "_NeuralNetworkEmissions only supports `single_subspace=True`"
+        super(_LogisticEmissions, self).__init__(N, K, D, M=M, single_subspace=True)
+
+        self.comb_type=comb_type
+        # Initialize the parameters
+        # n_kn=16
+        if init_params is None:
+            self.ps=np.zeros([N,3,D])
+            for i in range(N):
+                for j in range(D):
+                    self.ps[i,:,j]=np.array([10.,0.,.5])
+                    # self.ps[i,:,j]=np.array([10.,0.,1.])
+        else:
+            # self.ps=np.array(init_params)
+            self.ps=init_params
+
+
+    @property
+    def params(self):
+        return self.ps
+
+    @params.setter
+    def params(self, value):
+        self.ps = value
+
+    def permute(self, perm):
+        pass
+
+    def forward(self, x, input, tag):
+        # # output = [spline_func(x[:,None,0,None],p_i) for p_i in self.ps]
+        # # output = [spline_func(x,p_i) for p_i in self.ps] #good before
+        # output = [spline_func(x,p_i) for p_i in self.ps]
+        # # output = [spline_func(x[:,None,i,None],p_i) for (p_i, i) in zip(self.ps, range(N)]
+        # # print(len(output))
+        # # print(output[0].shape)
+        # # print(x.shape)
+        # # print(np.hstack(output).shape)
+        # # print(np.vstack(output).shape)
+        # temp=np.hstack(output)
+        # temp2=np.expand_dims(temp,1)
+        # # print(temp2.shape)
+        # # return np.vstack(output)
+        # return temp2
+        if self.comb_type=='mult':
+            final_output=1
+            for d in range(self.D):
+                output = [logistic_func(x[:,d:d+1],p_i[:,d:d+1]) for p_i in self.ps]
+                temp=np.hstack(output)
+                temp2=np.expand_dims(temp,1)
+                final_output=final_output*temp2
+            return final_output
+        elif self.comb_type=='add':
+            final_output=0
+            for d in range(self.D):
+                # print("d",d)
+                # print("p shape",self.ps.shape)
+                # temp_p=self.ps[:,:,d:d+1]
+                output = [logistic_func(x[:,d:d+1],p_i[:,d:d+1]) for p_i in self.ps]
+                temp=np.hstack(output)
+                temp2=np.expand_dims(temp,1)
+                final_output=final_output+temp2
+            return final_output
+        else:
+            NotImplementedError('Incorrect type of latent combination')
+
+
+
+    def _invert(self, data, input, mask, tag):
+        """
+        Inverse is... who knows!
+        """
+        # return npr.randn(data.shape[0], self.D)
+        # m=np.mean(data,axis=1).reshape(-1,1)
+        # return 1*m/np.max(m)
+
+        # temp=npr.rand(data.shape[0], self.D)-0.5
+        # m=np.mean(data,axis=1).reshape(-1,1)
+        # temp[:,0:1]=m/np.max(m)-0.5
+
+        temp=1.6*npr.rand(data.shape[0], self.D)-0.8
+        # m=np.mean(data,axis=1).reshape(-1,1)
+
+        # #Initialize first latent w/ mean
+        if tag is None:
+            print("no tag")
+            m=np.mean(data*mask,axis=1).reshape(-1,1)
+            if np.all(m==0):
+                temp[:,0:1]=-0.8
+            else:
+                temp[:,0:1]=1.6*m/np.max(m)-0.8#+.01*npr.rand(data.shape[0], 1)
+
+        else:
+            print("tag")
+            temp=tag
+
+        #Initialize latents w/ means of subsets of neurons
+        # for d in range(self.D):
+        #     m=np.mean(data[:,int(data.shape[1]*d/self.D):int(data.shape[1]*(d+1)/self.D)])
+        #     if np.all(m==0):
+        #         temp[:,d]=-0.8
+        #     else:
+        #         temp[:,d]=1.6*m/np.max(m)-0.8
+
+
+        return temp
+
+    def log_prior(self):
+            gamma=0 #was 10 #or 100
+            vals=[self.ps[i][0,:]**2 for i in range(len(self.ps))]
+            # print(vals)
+            return -gamma*np.sum(vals)#np.sum(self.ps[:,1,:]**2)
+
+            # return 0
+
+
+class _MonotonicNeuralNetworkEmissions(_Emissions):
+    def __init__(self, N, K, D, M=0, hidden_layer_sizes=(50,),init_params=None, single_subspace=True):
+        assert single_subspace, "_NeuralNetworkEmissions only supports `single_subspace=True`"
+        super(_MonotonicNeuralNetworkEmissions, self).__init__(N, K, D, M=M, single_subspace=True)
+
+        # Initialize the neural network weights
+        assert N > D
+        layer_sizes = (D + M,) + hidden_layer_sizes + (1,)
+
+        self.iter_count=0
+
+        # print("w_orig",[npr.randn(m, n) * np.sqrt(1. / m) for m, n in zip(layer_sizes[:-1], layer_sizes[1:])])
+        # print("b_orig",[npr.randn(n) for n in layer_sizes[1:]])
+
+
+        # print("w_new",[[npr.randn(m, n) * np.sqrt(1. / m) for m, n in zip(layer_sizes[:-1], layer_sizes[1:])] for i in range(2)])
+        # self.N=N
+
+        # weights=[]
+        if init_params is None:
+            biases=[]
+            for i in range(N):
+                # weights.append([npr.randn(m, n) * np.sqrt(1. / m) for m, n in zip(layer_sizes[:-1], layer_sizes[1:])])
+                biases.append([npr.randn(n) for n in layer_sizes[1:]])
+            self.weights = [[npr.randn(m, n) * np.sqrt(1. / m) for m, n in zip(layer_sizes[:-1], layer_sizes[1:])] for i in range(N)]
+            # self.biases = [[npr.randn(n) for n in layer_sizes[1:]] for i in range(N)]
+            # self.weights=weights
+            self.biases=biases
+        else:
+            self.weights, self.biases = init_params
+
+
+        # print("w_new",self.weights[0])
+        # print("b_new",self.biases[0])
+        # print("w_new",self.weights)
+        # print("b_new",self.biases)
+        #
+        # print("w_tmp",self.weights[0])
+        # i=0
+        # for ws,bs in zip(self.weights[i],self.biases[i]):
+        #     print("w",ws)
+        #     print("b",bs)
+
+    @property
+    def params(self):
+        return self.weights, self.biases
+
+    @params.setter
+    def params(self, value):
+        self.weights, self.biases = value
+
+    def permute(self, perm):
+        pass
+
+    def forward(self, x, input, tag):
+        inputs = np.column_stack((x, input))
+
+        output=[]
+
+        for i in range(len(self.weights)):
+        #     for ws,bs in zip(self.weights[i],self.biases[i]):
+        #         print("ws",ws)
+        #         print("bs",bs)
+        #         print("next")
+        #         for w,b in zip(ws,bs):
+        #             print("w",w)
+        #             print("b",b)
+
+            # output.append(mnn_func(x,ws,bs) for ws,bs in zip(self.weights[i],self.biases[i]))
+            if self.iter_count<-1:
+                output.append(mnn_func(x,self.weights[i],self.biases[i]))
+            else:
+                output.append(mnn_func2(x,self.weights[i],self.biases[i]))
+            # print("ws",self.weights[i])
+        # print("o",output[0].shape)
+        # output = [mnn_func(x,ws,bs) for ws,bs in zip(self.weights,self.biases)]
+        temp=np.hstack(output)
+        final_output=np.expand_dims(temp,1)
+
+        # self.iter_count=self.iter_count+1
+        # print(self.iter_count)
+
+        return final_output
+
+
+
+
+    def _invert(self, data, input, mask, tag):
+        """
+        Inverse is... who knows!
+        """
+        # return npr.randn(data.shape[0], self.D)
+
+        # temp=1.6*npr.rand(data.shape[0], self.D)-0.8
+        # m=np.mean(data,axis=1).reshape(-1,1)
+        # temp[:,0:1]=1.6*m/np.max(m)-0.8
+
+        # temp=1*npr.rand(data.shape[0], self.D)+1
+        # m=np.mean(data,axis=1).reshape(-1,1)
+        # temp[:,0:1]=1*m/np.max(m)+1
+
+        if tag is None:
+
+            temp=1*npr.rand(data.shape[0], self.D)
+            m=np.mean(data,axis=1).reshape(-1,1)
+            temp[:,0:1]=1*m/np.max(m)
+
+        else:
+            temp=tag
+
+        return temp
+
+
+    def log_prior(self):
+        self.iter_count=self.iter_count+1
+
+        return 0
+
+        # beta=100
+        # return beta*np.sum(self.weights**2)+beta*np.sum(self.biases**2)
+        # bs=[]
+        # for i in range(len(self.biases)):
+        #     for j in self.biases[i]:
+        #         bs.append(np.sum(softplus(j)**2))
+        # ws=[]
+        # for i in range(len(self.weights)):
+        #     for j in self.weights[i]:
+        #         ws.append(np.sum(softplus(j)**2))
+        # # print(bs)
+        # return -beta*np.sum(ws)
+
+
+
+            # smooth_spline_pens=[np.sum(np.abs(np.diff(np.diff(delta_ys[i],axis=0),axis=0))) for i in range(len(self.ps))]
+
+
+# Allow general nonlinear emission models with neural networks
+# class _MonotonicNeuralNetworkEmissions(_Emissions):
+#     def __init__(self, N, K, D, M=0, hidden_layer_sizes=(50,), single_subspace=True):
+#         assert single_subspace, "_NeuralNetworkEmissions only supports `single_subspace=True`"
+#         super(_MonotonicNeuralNetworkEmissions, self).__init__(N, K, D, M=M, single_subspace=True)
+#
+#         # Initialize the neural network weights
+#         assert N > D
+#         layer_sizes = (D + M,) + hidden_layer_sizes + (N,)
+#         self.weights = [npr.randn(m, n) * np.sqrt(1. / m) for m, n in zip(layer_sizes[:-1], layer_sizes[1:])]
+#         self.biases = [npr.randn(n) for n in layer_sizes[1:]]
+#
+#     @property
+#     def params(self):
+#         return self.weights, self.biases
+#
+#     @params.setter
+#     def params(self, value):
+#         self.weights, self.biases = value
+#
+#     def permute(self, perm):
+#         pass
+#
+#     def forward(self, x, input, tag):
+#         inputs = np.column_stack((x, input))
+#         for W0, b0 in zip(self.weights, self.biases):
+#             # print(W.shape)
+#             W=softplus(W0)
+#             b=softplus(b0)
+#             outputs = np.dot(inputs, W) + b
+#             inputs = np.tanh(outputs)
+#         return outputs[:, None, :]
+#
+#     def _invert(self, data, input, mask, tag):
+#         """
+#         Inverse is... who knows!
+#         """
+#         # return npr.randn(data.shape[0], self.D)
+#         temp=1.6*npr.rand(data.shape[0], self.D)-0.8
+#         m=np.mean(data,axis=1).reshape(-1,1)
+#         temp[:,0:1]=1.6*m/np.max(m)-0.8
+#
+#         return temp
 
 
 # Allow general nonlinear emission models with neural networks
@@ -714,6 +1053,7 @@ class _GaussianEmissionsMixin(object):
             return np.sum(lls * mask[:, None, :], axis=2)
         #Scale log likelihood by number of data points (so trials w/ fewer data points are weighted equally per data point)
         else:
+            # print(lls.shape)
             return np.sum(lls * mask[:, None, :], axis=2)*self.ll_scale/data.shape[0]
 
     @ensure_args_not_none
@@ -730,6 +1070,59 @@ class _GaussianEmissionsMixin(object):
     def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
         mus = self.forward(variational_mean, input, tag)
         return mus[:, 0, :] if self.single_subspace else np.sum(mus * expected_states[:,:,None], axis=1)
+
+
+# Observation models for SLDS
+class _IsoGaussianEmissionsMixin(object):
+    def __init__(self, N, K, D, M=0, single_subspace=True, ll_scale=0, **kwargs):
+        super(_IsoGaussianEmissionsMixin, self).__init__(N, K, D, M=M, single_subspace=single_subspace, **kwargs)
+        self.inv_etas = -4 + npr.randn(1)
+        self.ll_scale=ll_scale
+
+    @property
+    def params(self):
+        return tuple(super(_IsoGaussianEmissionsMixin, self).params) + (self.inv_etas,)
+
+    @params.setter
+    def params(self, value):
+        self.inv_etas = value[-1]
+        super(_IsoGaussianEmissionsMixin, self.__class__).params.fset(self, value[:-1])
+
+    def permute(self, perm):
+        super(_IsoGaussianEmissionsMixin, self).permute(perm)
+        if not self.single_subspace:
+            self.inv_etas = self.inv_etas[perm]
+
+    def log_likelihoods(self, data, input, mask, tag, x):
+        mus = self.forward(x, input, tag)
+        etas = np.exp(self.inv_etas)
+        lls = -0.5 * np.log(2 * np.pi * etas) - 0.5 * (data[:, None, :] - mus)**2 / etas
+        # print(data.shape)
+        # print(np.sum(lls * mask[:, None, :], axis=2)/data.shape[0])
+        # return np.sum(lls * mask[:, None, :], axis=2)
+        if self.ll_scale==0:
+            return np.sum(lls * mask[:, None, :], axis=2)
+        #Scale log likelihood by number of data points (so trials w/ fewer data points are weighted equally per data point)
+        else:
+            # print(lls.shape)
+            # return np.sum(lls * mask[:, None, :], axis=2)*self.ll_scale/data.shape[0]/input[0,0]
+            return np.sum(lls * mask[:, None, :], axis=2)*self.ll_scale/data.shape[0]
+
+    @ensure_args_not_none
+    def invert(self, data, input=None, mask=None, tag=None):
+        return self._invert(data, input=input, mask=mask, tag=tag)
+
+    def sample(self, z, x, input=None, tag=None):
+        T = z.shape[0]
+        z = np.zeros_like(z, dtype=int) if self.single_subspace else z
+        mus = self.forward(x, input, tag)
+        etas = np.exp(self.inv_etas)
+        return mus[np.arange(T), z, :] + np.sqrt(etas[z]) * npr.randn(T, self.N)
+
+    def smooth(self, expected_states, variational_mean, data, input=None, mask=None, tag=None):
+        mus = self.forward(variational_mean, input, tag)
+        return mus[:, 0, :] if self.single_subspace else np.sum(mus * expected_states[:,:,None], axis=1)
+
 
 
 class GaussianEmissions(_GaussianEmissionsMixin, _LinearEmissions):
@@ -767,6 +1160,24 @@ class GaussianNeuralNetworkEmissions(_GaussianEmissionsMixin, _NeuralNetworkEmis
 
 class GaussianSplineEmissions(_GaussianEmissionsMixin, _SplineEmissions):
     pass
+
+class GaussianLogisticEmissions(_GaussianEmissionsMixin, _LogisticEmissions):
+    pass
+
+class GaussianMonotonicNeuralNetworkEmissions(_GaussianEmissionsMixin, _MonotonicNeuralNetworkEmissions):
+    pass
+
+class IsotropicGaussianSplineEmissions(_IsoGaussianEmissionsMixin, _SplineEmissions):
+    pass
+
+class IsotropicGaussianLogisticEmissions(_IsoGaussianEmissionsMixin, _LogisticEmissions):
+    pass
+
+class IsotropicGaussianMonotonicNeuralNetworkEmissions(_IsoGaussianEmissionsMixin, _MonotonicNeuralNetworkEmissions):
+    pass
+
+
+
 
 class GaussianCompoundNeuralNetworkEmissions(_GaussianEmissionsMixin, _CompoundNeuralNetworkEmissions):
     pass
